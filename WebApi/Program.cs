@@ -10,7 +10,6 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -19,22 +18,10 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-
 var configuration = app.Configuration.GetSection("Optimizely");
 string? clientId = configuration.GetValue<string>("ClientId");
 string? clientSecret = configuration.GetValue<string>("ClientSecret");
 string? redUri = configuration.GetValue<string>("RedirectUri");
-
-var authUrl = $"https://accounts.cmp.optimizely.com/o/oauth2/v1/auth?client_id={clientId}&redirect_uri={redUri}&response_type=code&scope=openid%20profile%20offline_access";
-
-Console.WriteLine();
-Console.WriteLine(authUrl);
-
-app.MapGet("/auth", (ctx) =>
-{
-    ctx.Response.Redirect(authUrl);
-    return Task.CompletedTask;
-});
 
 app.MapGet("/auth/callback", async (IMemoryCache cache, HttpContext ctx) =>
 {
@@ -62,12 +49,20 @@ app.MapGet("/auth/callback", async (IMemoryCache cache, HttpContext ctx) =>
     cache.Set("token", tokenResponse);
 
     await ctx.Response.WriteAsync("Success! You can now close this window and can make requests to the API using the token stored in the cache at /assets");
-});
+})
+.WithDescription("Callback for the OAuth flow")
+.ExcludeFromDescription();
+
+app.MapGet("/auth", (HttpContext ctx) =>
+    Results.Redirect(
+        $"https://accounts.cmp.optimizely.com/o/oauth2/v1/auth?client_id={clientId}&redirect_uri={redUri}&response_type=code&scope=openid%20profile%20offline_access"
+    ))
+    .WithDescription("Begin the OAuth flow")
+    .Produces(StatusCodes.Status307TemporaryRedirect);
 
 app.MapGet("/assets", async (IMemoryCache cache) =>
 {
     var token = cache.Get<TokenResponse>("token");
-
     using var client = new HttpClient();
     var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, "https://api.cmp.optimizely.com/v3/assets")
     {
@@ -79,8 +74,9 @@ app.MapGet("/assets", async (IMemoryCache cache) =>
 
     var responseString = await response.Content.ReadAsStringAsync();
     var root = JsonSerializer.Deserialize<AssetsResponse>(responseString);
-
     return Results.Ok(root);
-});
+})
+.WithDescription("Get a list of assets")
+.Produces<AssetsResponse>(StatusCodes.Status200OK);
 
 app.Run();
