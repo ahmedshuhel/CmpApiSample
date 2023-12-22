@@ -1,12 +1,14 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSingleton<IMemoryCache, MemoryCache>();
 builder.Services.AddSwaggerGen();
+builder.Services.Configure<OptimizelySettings>(builder.Configuration.GetSection("Optimizely"));
 
 var app = builder.Build();
 
@@ -16,25 +18,21 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+
 app.UseHttpsRedirection();
 
-var configuration = app.Configuration.GetSection("Optimizely");
-string? clientId = configuration.GetValue<string>("ClientId");
-string? clientSecret = configuration.GetValue<string>("ClientSecret");
-string? redUri = configuration.GetValue<string>("RedirectUri");
-
-app.MapGet("/auth/callback", async (IMemoryCache cache, HttpContext ctx) =>
+app.MapGet("/auth/callback", async (IMemoryCache cache, IOptions<OptimizelySettings> settings, HttpContext ctx) =>
 {
     // Construct a web request to send to the authorization server to get the access token
     var request = new HttpRequestMessage(HttpMethod.Post, "https://accounts.cmp.optimizely.com/o/oauth2/v1/token")
     {
         Content = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            ["client_id"] = clientId,
-            ["client_secret"] = clientSecret,
+            ["client_id"] = settings.Value.ClientId,
+            ["client_secret"] = settings.Value.ClientSecret,
             ["code"] = ctx.Request.Query["code"],
             ["grant_type"] = "authorization_code",
-            ["redirect_uri"] = redUri
+            ["redirect_uri"] = settings.Value.RedirectUri
         })
     };
 
@@ -53,12 +51,17 @@ app.MapGet("/auth/callback", async (IMemoryCache cache, HttpContext ctx) =>
 .WithDescription("Callback for the OAuth flow")
 .ExcludeFromDescription();
 
-app.MapGet("/auth", (HttpContext ctx) =>
-    Results.Redirect(
-        $"https://accounts.cmp.optimizely.com/o/oauth2/v1/auth?client_id={clientId}&redirect_uri={redUri}&response_type=code&scope=openid%20profile%20offline_access"
-    ))
-    .WithDescription("Begin the OAuth flow")
-    .Produces(StatusCodes.Status307TemporaryRedirect);
+app.MapGet("/auth", (IOptions<OptimizelySettings> settings) =>
+{
+    var authUrl = string.Format(
+        settings.Value.AuthUrlTemplate,
+        settings.Value.ClientId,
+        settings.Value.RedirectUri
+    );
+    return Results.Redirect(authUrl);
+})
+.WithDescription("Begin the OAuth flow")
+.Produces(StatusCodes.Status307TemporaryRedirect);
 
 app.MapGet("/assets", async (IMemoryCache cache) =>
 {
